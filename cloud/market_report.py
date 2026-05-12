@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SITE_DIR = ROOT / "site"
 REPORTS_DIR = SITE_DIR / "reports"
 OPENAI_URL = "https://api.openai.com/v1/responses"
+GEMINI_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
 def now_in(tz: str) -> dt.datetime:
@@ -509,6 +510,46 @@ def call_openai(prompt: str):
     return text
 
 
+def call_gemini(prompt: str):
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is missing")
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    url = GEMINI_URL_TEMPLATE.format(model=model)
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        },
+    }
+    r = requests.post(
+        url,
+        params={"key": api_key},
+        json=payload,
+        timeout=180,
+        headers={"Content-Type": "application/json"},
+    )
+    if r.status_code >= 400:
+        raise RuntimeError(f"Gemini API failed {r.status_code}: {r.text[:1000]}")
+    data = r.json()
+    parts = []
+    for candidate in data.get("candidates", []):
+        content = candidate.get("content", {})
+        for part in content.get("parts", []):
+            if "text" in part:
+                parts.append(part["text"])
+    text = "\n".join(parts).strip()
+    if not text:
+        raise RuntimeError("Gemini response had no text")
+    return text
+
+
 def extract_json(text: str):
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
@@ -689,7 +730,11 @@ def main():
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     sources = collect_sources(args.mode)
-    if os.environ.get("FREE_AGGREGATE", "1") == "1" and not os.environ.get("OPENAI_API_KEY"):
+    if os.environ.get("USE_GEMINI", "0") == "1":
+        prompt = build_prompt(args.mode, sources)
+        result_text = call_gemini(prompt)
+        result = extract_json(result_text)
+    elif os.environ.get("FREE_AGGREGATE", "1") == "1" and not os.environ.get("OPENAI_API_KEY"):
         result = make_aggregate_report(args.mode, sources)
     elif os.environ.get("FREE_AGGREGATE", "1") == "1":
         result = make_aggregate_report(args.mode, sources)
