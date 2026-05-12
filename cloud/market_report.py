@@ -611,6 +611,7 @@ def send_line_card(meta: dict, report_url: str):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
     if not token:
         raise RuntimeError("LINE_CHANNEL_ACCESS_TOKEN is missing")
+    token = "".join(token.split())
     card = {
         "type": "flex",
         "altText": meta.get("title", "市場快報"),
