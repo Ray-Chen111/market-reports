@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import textwrap
+import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -528,15 +529,24 @@ def call_gemini(prompt: str):
             "responseMimeType": "application/json",
         },
     }
-    r = requests.post(
-        url,
-        params={"key": api_key},
-        json=payload,
-        timeout=180,
-        headers={"Content-Type": "application/json"},
-    )
-    if r.status_code >= 400:
-        raise RuntimeError(f"Gemini API failed {r.status_code}: {r.text[:1000]}")
+    last_error = None
+    for attempt in range(4):
+        r = requests.post(
+            url,
+            params={"key": api_key},
+            json=payload,
+            timeout=180,
+            headers={"Content-Type": "application/json"},
+        )
+        if r.status_code < 400:
+            break
+        last_error = f"Gemini API failed {r.status_code}: {r.text[:1000]}"
+        if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
+            sleep_seconds = [20, 45, 90][attempt]
+            print(f"{last_error}\nRetrying Gemini in {sleep_seconds}s...")
+            time.sleep(sleep_seconds)
+            continue
+        raise RuntimeError(last_error)
     data = r.json()
     parts = []
     for candidate in data.get("candidates", []):
@@ -732,8 +742,16 @@ def main():
     sources = collect_sources(args.mode)
     if os.environ.get("USE_GEMINI", "0") == "1":
         prompt = build_prompt(args.mode, sources)
-        result_text = call_gemini(prompt)
-        result = extract_json(result_text)
+        try:
+            result_text = call_gemini(prompt)
+            result = extract_json(result_text)
+        except Exception as exc:
+            if os.environ.get("FALLBACK_AGGREGATE", "1") == "1":
+                print(f"Gemini failed, falling back to aggregate report: {exc}")
+                result = make_aggregate_report(args.mode, sources)
+                result["meta"]["summary"] = "Gemini 暫時忙碌，本次先改用免費新聞聚合版；請點完整報告查看來源清單。"
+            else:
+                raise
     elif os.environ.get("FREE_AGGREGATE", "1") == "1" and not os.environ.get("OPENAI_API_KEY"):
         result = make_aggregate_report(args.mode, sources)
     elif os.environ.get("FREE_AGGREGATE", "1") == "1":
