@@ -17,6 +17,9 @@ on:
         required: true
         default: true
         type: boolean
+  repository_dispatch:
+    types:
+      - market-report
   schedule:
     - cron: "0 0 * * 1-5"
     - cron: "30 12 * * 1-5"
@@ -42,6 +45,11 @@ jobs:
             if [[ "${{ inputs.force }}" == "true" ]]; then
               echo "FORCE_RUN=1" >> "$GITHUB_ENV"
             fi
+          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            echo "mode=${{ github.event.client_payload.mode }}" >> "$GITHUB_OUTPUT"
+            if [[ "${{ github.event.client_payload.force }}" == "true" ]]; then
+              echo "FORCE_RUN=1" >> "$GITHUB_ENV"
+            fi
           else
             minute_hour="$(date -u +'%H:%M')"
             dow="$(date -u +'%u')"
@@ -64,10 +72,9 @@ jobs:
 
       - name: Generate report
         env:
-          USE_GEMINI: "1"
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-2.5-flash
-          FREE_AGGREGATE: "0"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4.1-mini' }}
+          FREE_AGGREGATE: "1"
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           MARKET_REPORT_BASE_URL: https://ray-chen111.github.io/market-reports
         run: python cloud/market_report.py --mode "${{ steps.mode.outputs.mode }}" --no-line
