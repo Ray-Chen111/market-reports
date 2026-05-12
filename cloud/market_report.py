@@ -680,6 +680,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["tw", "us", "weekly"], required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-line", action="store_true")
     args = parser.parse_args()
 
     if not should_run(args.mode):
@@ -703,6 +704,7 @@ def main():
     meta["slug"] = slug
     report_path = REPORTS_DIR / f"{slug}.html"
     report_path.write_text(html_report(report, meta), encoding="utf-8")
+    (REPORTS_DIR / f"{slug}.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     index = SITE_DIR / "index.html"
     index.write_text(
@@ -720,7 +722,7 @@ def main():
         encoding="utf-8",
     )
 
-    if not args.dry_run:
+    if not args.dry_run and not args.no_line:
         send_line_card(meta, report_url)
     print(report_url)
 
