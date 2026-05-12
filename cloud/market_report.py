@@ -327,7 +327,8 @@ def html_report(report: str, meta: dict):
             if not in_list:
                 blocks.append("<ul>")
                 in_list = True
-            blocks.append(f"<li>{esc(re.sub(r'^\\d+\\.\\s+', '', line))}</li>")
+            list_text = re.sub(r"^\d+\.\s+", "", line)
+            blocks.append(f"<li>{esc(list_text)}</li>")
             continue
         if in_list:
             blocks.append("</ul>")
