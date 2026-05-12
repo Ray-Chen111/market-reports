@@ -778,7 +778,7 @@ def main():
     base_url = os.environ.get("MARKET_REPORT_BASE_URL", "").rstrip("/")
     if not base_url:
         raise RuntimeError("MARKET_REPORT_BASE_URL is missing")
-    report_url = f"{base_url}/reports/{slug}.html"
+    report_url = f"{base_url}/site/reports/{slug}.html"
 
     (ROOT / "last-run.json").write_text(
         json.dumps({"mode": args.mode, "slug": slug, "url": report_url, "generated_at_utc": dt.datetime.utcnow().isoformat()}, ensure_ascii=False, indent=2),
