@@ -1,84 +1,9 @@
-name: Market Reports
-
-on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Report mode"
-        required: true
-        default: "tw"
-        type: choice
-        options:
-          - tw
-          - us
-          - weekly
-      force:
-        description: "Force run even outside market-time guard"
-        required: true
-        default: true
-        type: boolean
-  schedule:
-    - cron: "0 0 * * 1-5"
-    - cron: "30 12 * * 1-5"
-    - cron: "30 13 * * 1-5"
-    - cron: "30 12 * * 0"
-
-permissions:
-  contents: write
-
-jobs:
-  report:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set mode
-        id: mode
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
-            if [[ "${{ inputs.force }}" == "true" ]]; then
-              echo "FORCE_RUN=1" >> "$GITHUB_ENV"
-            fi
-          else
-            minute_hour="$(date -u +'%H:%M')"
-            dow="$(date -u +'%u')"
-            if [[ "$dow" == "7" && "$minute_hour" == "12:30" ]]; then
-              echo "mode=weekly" >> "$GITHUB_OUTPUT"
-            elif [[ "$minute_hour" == "00:00" ]]; then
-              echo "mode=tw" >> "$GITHUB_OUTPUT"
-            else
-              echo "mode=us" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: pip install -r cloud/requirements.txt
-
-      - name: Generate report and send LINE card
+      - name: Generate report
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4.1-mini' }}
+          USE_GEMINI: "1"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+          FREE_AGGREGATE: "0"
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           MARKET_REPORT_BASE_URL: https://ray-chen111.github.io/market-reports
-        run: python cloud/market_report.py --mode "${{ steps.mode.outputs.mode }}"
-
-      - name: Commit generated site
-        shell: bash
-        run: |
-          git config user.name "market-report-bot"
-          git config user.email "market-report-bot@users.noreply.github.com"
-          git add site last-run.json
-          if git diff --cached --quiet; then
-            echo "No generated changes."
-          else
-            git commit -m "Update market report"
-            git push
-          fi
+        run: python cloud/market_report.py --mode "${{ steps.mode.outputs.mode }}" --no-line
