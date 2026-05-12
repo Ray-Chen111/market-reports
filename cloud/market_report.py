@@ -265,6 +265,219 @@ date_label: {tw_now.strftime('%Y-%m-%d')}｜展望至 {next_week}
     return common + "\n" + specific + "\n候選資料如下：\n" + source_text
 
 
+def item_time(item):
+    value = item.get("published_utc") or ""
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+
+
+def flatten_items(sources: dict):
+    items = []
+    seen = set()
+    for feed in sources.get("feeds", []):
+        query = feed.get("query", "")
+        for item in feed.get("items", []):
+            if item.get("error"):
+                continue
+            title = (item.get("title") or "").strip()
+            url = (item.get("url") or "").strip()
+            if not title or not url:
+                continue
+            key = re.sub(r"\s+", " ", title.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            item = dict(item)
+            item["query"] = query
+            items.append(item)
+    items.sort(key=item_time, reverse=True)
+    return items
+
+
+IMPORTANT_KEYWORDS = [
+    "台積電", "tsmc", "tsm", "輝達", "nvidia", "nvda", "amd", "micron", "美光",
+    "broadcom", "博通", "費半", "半導體", "ai", "asic", "伺服器", "資料中心",
+    "cpi", "pce", "fed", "fomc", "利率", "殖利率", "美債", "美元", "油價",
+    "外資", "投信", "三大法人", "新台幣", "營收", "財報", "法說", "重大訊息",
+    "關稅", "川普", "伊朗", "地緣", "央行", "金管會",
+]
+
+MEDIUM_KEYWORDS = [
+    "記憶體", "矽光子", "面板", "航運", "金融", "塑化", "電源", "散熱", "pcb",
+    "雲端", "零售銷售", "就業", "失業", "pmi", "美元", "期貨", "adr", "除權息",
+]
+
+
+def score_item(item):
+    text = ((item.get("title") or "") + " " + (item.get("query") or "") + " " + (item.get("source") or "")).lower()
+    score = 0
+    for keyword in IMPORTANT_KEYWORDS:
+        if keyword.lower() in text:
+            score += 3
+    for keyword in MEDIUM_KEYWORDS:
+        if keyword.lower() in text:
+            score += 1
+    source = (item.get("source") or "").lower()
+    for trusted in ["reuters", "ap", "中央社", "經濟日報", "鉅亨", "工商", "marketwatch", "yahoo", "investing"]:
+        if trusted.lower() in source:
+            score += 1
+    age = item_time(item)
+    if age > dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=36):
+        score += 2
+    return score
+
+
+def direction_for(title):
+    lower = title.lower()
+    negative = ["下跌", "賣超", "利空", "衰退", "風險", "戰", "油價", "通膨", "殖利率", "關稅", "跌", "弱"]
+    positive = ["上漲", "買超", "利多", "創高", "成長", "增", "ai", "訂單", "營收", "漲", "強"]
+    if any(word in lower for word in negative):
+        return "↓ 偏向：可能利空/風險"
+    if any(word in lower for word in positive):
+        return "↑ 偏向：可能利多"
+    return "↔ 偏向：中性/待確認"
+
+
+def section_items(items, min_high=3, min_medium=3, min_watch=2):
+    ranked = sorted(items, key=lambda item: (score_item(item), item_time(item)), reverse=True)
+    high = ranked[: max(min_high, min(5, len(ranked)))]
+    remaining = [x for x in ranked if x not in high]
+    medium = remaining[: max(min_medium, min(5, len(remaining)))]
+    remaining = [x for x in remaining if x not in medium]
+    watch = remaining[: max(min_watch, min(4, len(remaining)))]
+    return high, medium, watch
+
+
+def market_snapshot(mode, market):
+    lines = []
+    preferred = {
+        "tw": ["^TWII", "2330.TW", "2454.TW", "TSM", "^SOX", "NVDA", "AMD", "MU"],
+        "us": ["^GSPC", "^IXIC", "^DJI", "^SOX", "NVDA", "AMD", "AVGO", "MU", "TSM", "CL=F", "^TNX"],
+        "weekly": ["^TWII", "^GSPC", "^IXIC", "^SOX", "TSM", "NVDA", "CL=F", "^TNX"],
+    }.get(mode, [])
+    for symbol in preferred:
+        data = market.get(symbol)
+        if not data or data.get("error"):
+            continue
+        price = data.get("regularMarketPrice") or data.get("last_close")
+        prev = data.get("previousClose")
+        if price is None:
+            continue
+        change = ""
+        if prev:
+            try:
+                pct = (float(price) - float(prev)) / float(prev) * 100
+                change = f" ({pct:+.2f}%)"
+            except Exception:
+                pass
+        lines.append(f"{symbol}: {price}{change}")
+    return "；".join(lines[:10]) if lines else "行情資料暫缺"
+
+
+def make_aggregate_report(mode: str, sources: dict):
+    tw_now = now_in("Asia/Taipei")
+    ny_now = now_in("America/New_York")
+    items = flatten_items(sources)
+    high, medium, watch = section_items(
+        items,
+        min_high=3 if mode != "weekly" else 3,
+        min_medium=3 if mode != "weekly" else 4,
+        min_watch=2 if mode != "weekly" else 3,
+    )
+    snapshot = market_snapshot(mode, sources.get("market", {}))
+
+    if mode == "tw":
+        title = "台灣金融開盤前快報"
+        slug = f"tw-{tw_now.strftime('%Y-%m-%d')}"
+        date_label = f"{tw_now.strftime('%Y-%m-%d')}｜台北時間 08:00"
+        one_liner = "免費新聞聚合版：依多源新聞、官方/市場資料與行情快照整理，供你快速掌握台股開盤前重點。"
+        temp = "台股：依新聞熱度與行情快照判讀，請點完整報告查看來源"
+        risks = "風險：台積電/權值股、外資籌碼、美股半導體、匯率、油價與利率"
+        themes = "主線：AI、半導體、ASIC、記憶體、法說/營收、政策與法人籌碼"
+        impact_a = "台股影響"
+        impact_b = "國際連動"
+    elif mode == "us":
+        title = "美股開盤前快報"
+        slug = f"us-{ny_now.strftime('%Y-%m-%d')}"
+        date_label = f"{ny_now.strftime('%Y-%m-%d')}｜美東時間 08:30"
+        one_liner = "免費新聞聚合版：依多源新聞、行情快照與總經事件整理，供你快速掌握美股開盤前重點。"
+        temp = "美股：依新聞熱度與行情快照判讀，請點完整報告查看來源"
+        risks = "風險：CPI/Fed、美債殖利率、美元、油價、科技股評價與地緣政治"
+        themes = "主線：AI、半導體、Mag 7、雲端資本支出、費半與 TSM ADR"
+        impact_a = "美股影響"
+        impact_b = "台股影響"
+    else:
+        title = "台股＋美股下週展望"
+        slug = f"weekly-{tw_now.strftime('%Y-%m-%d')}"
+        date_label = f"{tw_now.strftime('%Y-%m-%d')}｜週日展望"
+        one_liner = "免費新聞聚合版：彙整下週台股與美股重要事件、總經數據、財報與產業焦點。"
+        temp = "下週：依事件密度與新聞熱度判讀，請點完整報告查看來源"
+        risks = "風險：總經數據、Fed/利率、油價、美元、美債、台股法說與外資籌碼"
+        themes = "主線：AI、半導體、重要財報、政策事件、經濟數據"
+        impact_a = "台股影響"
+        impact_b = "美股影響"
+
+    def render_item(item):
+        title_text = item.get("title", "").replace(" - ", "｜")
+        source = item.get("source") or "Google News"
+        published = item.get("published_utc") or ""
+        url = item.get("url") or ""
+        direction = direction_for(title_text)
+        return textwrap.dedent(
+            f"""\
+            {title_text}
+            {direction}
+            重點：{title_text}
+            {impact_a}：請優先確認是否涉及權值股、半導體、AI、利率/匯率、政策或法人籌碼。
+            {impact_b}：若涉及美股科技股、油價、美元、美債或地緣政治，需觀察隔日連動。
+            來源：{source}｜{published}
+            連結：{url}
+            """
+        ).strip()
+
+    def render_section(name, rows):
+        if not rows:
+            return f"{name}\n目前未篩出足夠高重要性新聞。"
+        return name + "\n\n" + "\n\n".join(render_item(row) for row in rows)
+
+    report = "\n\n".join(
+        [
+            f"【{title}】",
+            date_label,
+            "今日一句話" if mode != "weekly" else "下週一句話",
+            one_liner,
+            "市場溫度",
+            temp,
+            f"行情快照：{snapshot}",
+            f"主要風險：{risks}",
+            f"主線題材：{themes}",
+            "────────────────",
+            render_section("🔴 高度重要", high),
+            "────────────────",
+            render_section("🟡 中度重要", medium),
+            "────────────────",
+            render_section("🔵 觀察中", watch),
+            "────────────────",
+            "最該盯" if mode != "weekly" else "下週最該盯",
+            "1. 是否有官方公告、財報/法說或總經數據改變市場預期\n2. 半導體/AI 主線是否獲得美股與台股同步支撐\n3. 美債殖利率、美元、油價與外資資金是否轉向",
+            "提醒：以上為自動新聞聚合與來源整理，不是投資建議，也不含買賣指令。",
+        ]
+    )
+    meta = {
+        "slug": slug,
+        "title": title,
+        "date_label": date_label,
+        "summary": one_liner,
+        "temperature": temp,
+        "risks": f"風險：{risks}",
+        "themes": f"主線：{themes}",
+        "button_label": "查看完整報告",
+    }
+    return {"meta": meta, "report": report}
+
+
 def call_openai(prompt: str):
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -474,9 +687,14 @@ def main():
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     sources = collect_sources(args.mode)
-    prompt = build_prompt(args.mode, sources)
-    result_text = call_openai(prompt)
-    result = extract_json(result_text)
+    if os.environ.get("FREE_AGGREGATE", "1") == "1" and not os.environ.get("OPENAI_API_KEY"):
+        result = make_aggregate_report(args.mode, sources)
+    elif os.environ.get("FREE_AGGREGATE", "1") == "1":
+        result = make_aggregate_report(args.mode, sources)
+    else:
+        prompt = build_prompt(args.mode, sources)
+        result_text = call_openai(prompt)
+        result = extract_json(result_text)
     meta = result["meta"]
     report = result["report"]
 
