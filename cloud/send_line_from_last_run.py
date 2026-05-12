@@ -23,6 +23,13 @@ def wait_until_ready(url: str, attempts: int = 24, delay: int = 10):
     return False
 
 
+def page_url_candidates(url: str):
+    urls = [url]
+    if "/reports/" in url and "/site/reports/" not in url:
+        urls.append(url.replace("/reports/", "/site/reports/", 1))
+    return urls
+
+
 def main():
     last_run = json.loads((ROOT / "last-run.json").read_text(encoding="utf-8"))
     meta_path = ROOT / "site" / "reports" / f"{last_run['slug']}.meta.json"
@@ -38,11 +45,15 @@ def main():
             "themes": "",
             "button_label": "查看完整報告",
         }
-    url = last_run["url"]
-    if not wait_until_ready(url):
-        raise RuntimeError(f"Pages URL is still not ready: {url}")
-    send_line_card(meta, url)
-    print(url)
+    ready_url = None
+    for url in page_url_candidates(last_run["url"]):
+        if wait_until_ready(url):
+            ready_url = url
+            break
+    if not ready_url:
+        raise RuntimeError(f"Pages URL is still not ready: {last_run['url']}")
+    send_line_card(meta, ready_url)
+    print(ready_url)
 
 
 if __name__ == "__main__":
